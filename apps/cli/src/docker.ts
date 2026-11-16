@@ -2,7 +2,7 @@
  * Docker orchestration — compose lifecycle, network, image pull/build, worker spawning.
  *
  * Local mode: builds locally, uses docker-compose.yml from repo root, mounts prompts.
- * NPX mode: pulls from Docker Hub, uses bundled compose.yml.
+ * NPX mode: pulls one pinned keygraph/shannon digest, uses bundled compose.yml.
  */
 
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
@@ -22,6 +22,13 @@ import { runStep, spawnCaptured, surfaceOutput } from './ui.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const NPX_IMAGE_REPO = 'keygraph/shannon';
+/**
+ * Index digest of the published worker image that npx pulls.
+ * Tag `3.5.1` and tag `latest` both pointed at this digest on 2026-11-16.
+ */
+const NPX_IMAGE_DIGEST =
+  'sha256:c31b05cd9273816e7ccb3c5a76658b17debd9c433a615a87c19607dee867be02';
+const NPX_IMAGE = `${NPX_IMAGE_REPO}@${NPX_IMAGE_DIGEST}`;
 const DEV_IMAGE = 'shannon-worker';
 
 /** Docker label stamped on each worker container, mapping it back to its workspace so a single scan can be stopped by name. */
@@ -37,8 +44,10 @@ const WORKFLOW_ID_LABEL = 'shannon.workflow-id';
 const WORKER_PROTOCOL_LABEL = 'shannon.worker-protocol';
 export const WORKFLOW_ID_PROTOCOL = 'workflow-id-v1';
 
-export function getWorkerImage(version: string): string {
-  return getMode() === 'local' ? DEV_IMAGE : `${NPX_IMAGE_REPO}:${version}`;
+export function getWorkerImage(_version: string): string {
+  // Local mode builds DEV_IMAGE from this checkout. NPX mode does not follow the
+  // CLI version tag; that tag moves, so the pull is the pinned digest above.
+  return getMode() === 'local' ? DEV_IMAGE : NPX_IMAGE;
 }
 
 /** True when the working directory supplies a Dockerfile and build context. */
@@ -279,7 +288,7 @@ export function ensureImage(version: string): void {
       fail(
         `Failed to pull ${image}`,
         'The image may not be available for your platform yet.',
-        'Check https://hub.docker.com/r/keygraph/shannon for available tags.',
+        'The npx worker image is pinned by digest in this CLI.',
       );
     }
     pruneOldImages(version);
