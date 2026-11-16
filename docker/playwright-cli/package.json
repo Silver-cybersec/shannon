@@ -1,0 +1,9 @@
+{
+  "name": "shannon-playwright-cli",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Pinned global install of @playwright/cli for the worker image.",
+  "dependencies": {
+    "@playwright/cli": "0.1.1"
+  }
+}
