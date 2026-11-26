@@ -20,6 +20,7 @@ import type {
   ReportSarifDisposition,
   StoredPdfProvenance,
 } from '../types/run-state.js';
+import type { WorkflowFailureType } from '../types/workflow-failures.js';
 
 /**
  * The serializable slice of Capella's configuration passed across the Temporal workflow
@@ -110,6 +111,8 @@ export interface PipelineInput {
   exploit?: boolean; // false skips the exploitation phase
   authOnly?: boolean; // true stops the run after auth validation (no pentest, no report)
   validateModel?: boolean; // true stops the run after the preflight model checks (no pentest, no report)
+  maxConcurrency?: number;
+  agentTimeoutMs?: number;
 }
 
 /** What `loadResumeState` reconstructs from a prior workspace: independently verified, never assumed from session.json alone. */
@@ -203,6 +206,9 @@ export interface PipelineState {
   failedAgent: string | null;
   error: string | null;
   errorCode?: ErrorCode;
+  /** Closed failure type and check code behind `error`. */
+  failureType?: WorkflowFailureType;
+  failureCheckCode?: string;
   startTime: number;
   agentMetrics: Record<string, AgentMetrics>;
   operationalMetrics: Record<string, OperationalMetrics>;

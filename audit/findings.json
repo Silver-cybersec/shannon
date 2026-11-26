@@ -1,0 +1,167 @@
+{
+  "audit": {
+    "upstream": "https://github.com/KeygraphHQ/shannon",
+    "default_branch": "main",
+    "commit_sha": "3760d2f9df9f3afa374a8eb2473adadfbf9ed991",
+    "commit_time_hkt": "2026-11-26 04:51:49",
+    "previous_baseline": "4cef63e5900c9eda0b259a44f89458c7f8b1e10d",
+    "method": "只读静态审计。未部署、未安装依赖、未拉取镜像、未对任何目标发包。",
+    "counts": { "高": 2, "中": 4, "低": 4 }
+  },
+  "findings": [
+    {
+      "id": "SHANNON-H1",
+      "级别": "高",
+      "类别": "代码安全",
+      "路径": ["entrypoint.sh", "apps/cli/src/docker.ts", "apps/cli/src/index.ts", "apps/cli/src/paths.ts"],
+      "行号": ["entrypoint.sh:18", "apps/cli/src/docker.ts:512", "apps/cli/src/index.ts:229-238", "apps/cli/src/paths.ts:91-115"],
+      "commit_sha": "3760d2f9df9f3afa374a8eb2473adadfbf9ed991",
+      "证据链接": [
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/entrypoint.sh#L18",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/cli/src/docker.ts#L512",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/cli/src/index.ts#L229-L238",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/cli/src/paths.ts#L91-L94"
+      ],
+      "确认状态": "已确认",
+      "描述": "worker 入口把 Docker 传入的全部参数拼进 su -c 的一条 shell 字符串（exec su -m pentest -c \"exec $*\"）。内层 shell 会再次解析 &、;、$() 等元字符。CLI 只检查 URL 协议为 http 或 https，仓库目录名和配置文件名原样进入容器路径和命令行。docker run 本身使用参数数组，注入点在容器入口而不是宿主机 shell。su -m 会保留容器环境，因此注入命令以 pentest 用户身份运行，并能读到转发进容器的供应商凭据；工作区目录和可选的 pi auth.json 以可写方式挂载。本机 bash 用相同引号语义复核：查询串中的 & 会使后半段成为另一条命令。该复核未启动 Shannon，也未访问任何网络目标。相对旧基准，entrypoint.sh 无差异，此问题当时已存在、未被旧结论单列。",
+      "建议": "用 exec 直接切换用户并传递参数数组，不要把参数拼进 shell 字符串。在拼入任何 shell 之前拒绝 URL 与路径中的 shell 元字符。"
+    },
+    {
+      "id": "SHANNON-H2",
+      "级别": "高",
+      "类别": "代码安全",
+      "路径": ["apps/cli/src/docker.ts", "apps/cli/src/env.ts", "docker-compose.yml", "apps/worker/src/ai/pi/pi-executor.ts", "Dockerfile"],
+      "行号": ["apps/cli/src/docker.ts:431-506", "apps/cli/src/env.ts:96-112", "docker-compose.yml:7-12", "apps/worker/src/ai/pi/pi-executor.ts:60", "Dockerfile:104", "Dockerfile:134"],
+      "commit_sha": "3760d2f9df9f3afa374a8eb2473adadfbf9ed991",
+      "证据链接": [
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/cli/src/docker.ts#L431-L506",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/cli/src/env.ts#L96-L112",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/docker-compose.yml#L7-L12",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/worker/src/ai/pi/pi-executor.ts#L60"
+      ],
+      "确认状态": "已确认（代码与启动参数）。容器逃逸和横向访问未做动态验证",
+      "描述": "渗透代理与供应商密钥、目标登录材料处在同一个容器里，而该容器的限制不足以挡住被提示词带偏的 bash。docker run 使用 --network shannon-net、--security-opt seccomp=unconfined（注释写明作用于容器内全部进程），并默认把宿主 /etc/hosts 的环回名称改写成 host-gateway，Linux 上另加 host.docker.internal。目标仓库主体为 :ro，但工作区、输出目录、.shannon 与 .playwright 覆盖层可写；SHANNON_USE_PI_AUTH=1 时把宿主 ~/.pi/agent/auth.json 可写挂进容器。密钥以 -e KEY 形式进入容器环境，值不出现在 docker 参数里，但进程环境中可见。Temporal 以 start-dev、--ip 0.0.0.0 运行且无认证配置，端口只发布到宿主 127.0.0.1，同一 docker 网络上的容器仍可访问该服务。未挂载 docker.sock，也未设置 --privileged。镜像内 git safe.directory 为 *，/app 与若干缓存目录为 777。bash 工具仅有超时上限（最长 600 秒），默认扫描不加载路径拒绝规则。Capella 静态分析明确禁止 bash，渗透阶段没有同等限制。未动态验证从容器到达宿主服务或云元数据。",
+      "建议": "把模型密钥放到代理进程读不到的位置；Temporal 启用认证或与代理网络分开；seccomp 只放行浏览器所需的系统调用；pi 凭据只读挂载；收紧 /app 权限并去掉全局 safe.directory。"
+    },
+    {
+      "id": "SHANNON-M1",
+      "级别": "中",
+      "类别": "代码安全",
+      "路径": ["apps/worker/src/services/preflight.ts", "apps/cli/src/docker.ts"],
+      "行号": ["apps/worker/src/services/preflight.ts:65-78", "apps/worker/src/services/preflight.ts:470-483", "apps/cli/src/docker.ts:340-347"],
+      "commit_sha": "3760d2f9df9f3afa374a8eb2473adadfbf9ed991",
+      "证据链接": [
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/worker/src/services/preflight.ts#L65-L78",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/worker/src/services/preflight.ts#L470-L483"
+      ],
+      "确认状态": "已确认（拦截范围）。代理实际能否访问元数据地址未动态验证",
+      "描述": "预检只拒绝目标 URL 解析到 IPv4 169.254.0.0/16。注释写明 RFC1918 与环回是支持的扫描对象。BlockList 没有加入 IPv6 规则。DNS 固定只用于这次预检 HEAD，不约束随后代理通过 bash、浏览器发出的连接。/etc/hosts 转发同样只跳过 169.254 前缀。因此「不能扫描云元数据」只覆盖预检时的目标地址，不覆盖代理自己的出站。",
+      "建议": "把元数据网段拦截扩到 IPv6 与十进制等写法，并对代理出站单独做策略；在文档中写明 bash 不受预检拦截约束。"
+    },
+    {
+      "id": "SHANNON-M2",
+      "级别": "中",
+      "类别": "供应链",
+      "路径": ["pnpm-lock.yaml", "apps/worker/package.json", "apps/worker/src/ai/sast/capella/prompt-loader.ts", "apps/worker/src/config-parser.ts"],
+      "行号": ["apps/worker/package.json:41-56", "apps/worker/src/ai/sast/capella/prompt-loader.ts:83", "apps/worker/src/config-parser.ts:230-231"],
+      "commit_sha": "3760d2f9df9f3afa374a8eb2473adadfbf9ed991",
+      "证据链接": [
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/worker/src/ai/sast/capella/prompt-loader.ts#L83",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/pnpm-lock.yaml"
+      ],
+      "确认状态": "部分确认。2026-11-26 09:40 香港时间的 OSV 结果确认版本落在受影响区间；从扫描目标触发利用未证实",
+      "描述": "handlebars 锁定 4.7.9，OSV 给出 GHSA-8r5x-fm3f-whwj、GHSA-p8wg-vrv2-v86f、GHSA-xw65-4hp5-5hc7，修复版本为 4.7.10，前两条为 JavaScript 注入。调用点编译产品自带模板并设置 noEscape。smol-toml 1.6.1 有两条解析拒绝服务公告（修复 1.7.1 与 1.9.0）。js-yaml 4.1.1 有四条 CPU 拒绝服务公告，调用点使用 FAILSAFE_SCHEMA，该模式下是否仍可触发未复核。传递依赖 protobufjs 7.5.5 有 11 条 GHSA，且根 package.json 允许其安装脚本；业务代码未直接引用。开发依赖 turbo 2.8.17 有 CVE-2026-45772 与 CVE-2026-45773，修复于 2.9.14。这些结果不是恶意包通告。细节见 audit/supply-chain.md。",
+      "建议": "将 handlebars 升到至少 4.7.10，并按公告升级 smol-toml、js-yaml、protobufjs、turbo 后更新锁文件。"
+    },
+    {
+      "id": "SHANNON-M3",
+      "级别": "中",
+      "类别": "供应链",
+      "路径": ["Dockerfile", "docker-compose.yml", "apps/cli/infra/compose.yml", "apps/cli/src/docker.ts", ".github/workflows/release.yml"],
+      "行号": ["Dockerfile:5", "Dockerfile:23", "Dockerfile:44", "Dockerfile:82-95", "Dockerfile:119", "docker-compose.yml:7", "apps/cli/src/docker.ts:41-42", ".github/workflows/release.yml:139-166"],
+      "commit_sha": "3760d2f9df9f3afa374a8eb2473adadfbf9ed991",
+      "证据链接": [
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/Dockerfile#L5",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/Dockerfile#L82-L95",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/cli/src/docker.ts#L41-L42"
+      ],
+      "确认状态": "已确认（清单缺少摘要与校验和）。镜像层未拉取，不能据此声称层内容安全或恶意",
+      "描述": "两段构建都使用 cgr.dev/chainguard/wolfi-base:latest，无 digest；apk 包无版本。Typst 0.14.2 用 curl 从 GitHub Releases 下载，无校验和。@playwright/cli@0.1.1 与 pnpm@10.33.0 钉死版本但不在锁文件中。Temporal 镜像为 temporalio/temporal:1.7.0，无 digest。npx 模式按 keygraph/shannon:<版本> 拉取，客户端不校验 cosign。发布工作流会签名镜像，签名没有接到 CLI 的拉取路径。2026-11-26 09:40 香港时间 Docker Hub 上 latest 与 3.6.1 的标签更新时间早于本单基准提交。Chainguard 标签接口返回 401。",
+      "建议": "为基础镜像、Temporal 镜像和 Typst 压缩包固定 digest 或校验和。CLI 拉取后校验发布工作流的 cosign 签名。"
+    },
+    {
+      "id": "SHANNON-M4",
+      "级别": "中",
+      "类别": "架构",
+      "路径": ["plugins/shannon/skills/shannon/SKILL.md"],
+      "行号": ["plugins/shannon/skills/shannon/SKILL.md:14-28", "plugins/shannon/skills/shannon/SKILL.md:43"],
+      "commit_sha": "3760d2f9df9f3afa374a8eb2473adadfbf9ed991",
+      "证据链接": [
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/plugins/shannon/skills/shannon/SKILL.md#L14-L28",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/plugins/shannon/skills/shannon/SKILL.md#L43"
+      ],
+      "确认状态": "已确认（技能文本）。未安装插件，未观察编辑器代理的实际行为",
+      "描述": "本轮新增的插件让编辑器里的编码代理在用户主机上驱动 npx -y @keygraph/shannon@latest。安全规则（先确认授权、不把工具指向生产、不代跑 setup、不回显密钥、默认不用 php2shell、不扫描不受信任的仓库）写在技能正文里，CLI 没有对应的强制开关。@latest 会随标签移动。相对旧基准这是新的信任边界：旧树没有这套插件。",
+      "建议": "安装命令固定到已核对的版本。需要机器强制的规则（例如拒绝未确认的目标）放到 CLI，而不是只放在技能提示词里。"
+    },
+    {
+      "id": "SHANNON-L1",
+      "级别": "低",
+      "类别": "代码安全",
+      "路径": ["apps/cli/src/exp-php2shell/run.ts", "apps/cli/src/exp-php2shell/probe.ts", "apps/cli/src/index.ts"],
+      "行号": ["apps/cli/src/exp-php2shell/run.ts:38-48", "apps/cli/src/exp-php2shell/probe.ts:1-7", "apps/cli/src/index.ts:224-238"],
+      "commit_sha": "3760d2f9df9f3afa374a8eb2473adadfbf9ed991",
+      "证据链接": [
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/cli/src/exp-php2shell/probe.ts#L1-L7",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/cli/src/exp-php2shell/run.ts#L38-L48"
+      ],
+      "确认状态": "已确认（源码声明与调用路径）。未发送探测，未动态验证它是否停在崩溃步骤",
+      "描述": "这是产品功能，不是仓内故意漏洞，也不是隐藏后门。--exp-php2shell 在 CLI 进程内对操作者给出的 URL 发送崩溃探测（源码点名 CVE-2026-109618），并写明不发送后续代码执行请求（源码点名 CVE-2026-109619）。确认提示可被 --yes 跳过。URL 只校验 http/https，不经过 worker 的 169.254 拦截，流量从宿主机发出。误用会造成目标 PHP worker 的短暂中断。旧基准已包含该目录。",
+      "建议": "非交互环境默认拒绝该探测，并对私网与元数据地址使用和预检相同的拦截。"
+    },
+    {
+      "id": "SHANNON-L2",
+      "级别": "低",
+      "类别": "代码安全",
+      "路径": ["apps/worker/src/services/preflight.ts"],
+      "行号": ["apps/worker/src/services/preflight.ts:403-416"],
+      "commit_sha": "3760d2f9df9f3afa374a8eb2473adadfbf9ed991",
+      "证据链接": [
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/worker/src/services/preflight.ts#L403-L416"
+      ],
+      "确认状态": "已确认",
+      "描述": "预检的 HTTPS HEAD 设置 rejectUnauthorized: false，注释说明只检查可达性、不检查证书。这次请求不验证对端身份。后续浏览器与 bash 是否各自校验 TLS，本单未逐工具确认。",
+      "建议": "预检保持证书校验，把证书失败单独报告给操作者。"
+    },
+    {
+      "id": "SHANNON-L3",
+      "级别": "低",
+      "类别": "代码安全",
+      "路径": ["apps/worker/src/services/validate-authentication.ts", "apps/worker/src/temporal/activities.ts"],
+      "行号": ["apps/worker/src/services/validate-authentication.ts:128-135", "apps/worker/src/services/validate-authentication.ts:240-258", "apps/worker/src/temporal/activities.ts:2132-2140"],
+      "commit_sha": "3760d2f9df9f3afa374a8eb2473adadfbf9ed991",
+      "证据链接": [
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/worker/src/services/validate-authentication.ts#L240-L258",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/apps/worker/src/temporal/activities.ts#L2132-L2140"
+      ],
+      "确认状态": "已确认（判定条件）。未跑登录流程",
+      "描述": "认证预检把 cookies 与 origins 均为数组视为已保存的登录会话，空数组也能通过。代理拥有 bash，可以写入该文件。会话写在工作区 auth-state.json，正常结束时删除；删除失败只记警告。异常中断后文件是否残留，未动态验证。",
+      "建议": "要求与目标主机匹配的非空 cookie，并在失败路径同样删除会话文件。"
+    },
+    {
+      "id": "SHANNON-L4",
+      "级别": "低",
+      "类别": "代码安全",
+      "路径": ["Dockerfile"],
+      "行号": ["Dockerfile:102-104", "Dockerfile:134-137"],
+      "commit_sha": "3760d2f9df9f3afa374a8eb2473adadfbf9ed991",
+      "证据链接": [
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/Dockerfile#L102-L104",
+        "https://github.com/KeygraphHQ/shannon/blob/3760d2f9df9f3afa374a8eb2473adadfbf9ed991/Dockerfile#L134-L137"
+      ],
+      "确认状态": "已确认",
+      "描述": "镜像设置 git config --system --add safe.directory '*'，并把 /app 以及若干 /tmp 缓存目录设为 777。这放宽了同容器内其他用户对应用目录和任意路径 git 仓库的操作。与 SHANNON-H2 的沙箱问题同向，单独列出是因为它是镜像构建时的固定配置。",
+      "建议": "去掉全局 safe.directory，把应用目录权限收回到 pentest 用户。"
+    }
+  ]
+}

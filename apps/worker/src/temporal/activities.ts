@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { ApplicationFailure, Context, heartbeat } from '@temporalio/activity';
-import { resolveModelSelection } from '../ai/models.js';
+import { type ModelSelection, resolveModelSelection } from '../ai/models.js';
 import { syncPermissionSystemConfig } from '../ai/pi/permission-system.js';
 import { writePlaywrightStealthConfig } from '../ai/playwright-config-writer.js';
 import { AuditSession } from '../audit/index.js';
@@ -42,9 +42,13 @@ import { compactReportFindings as compactReportFindingsService } from '../servic
 import { getContainer, getOrCreateContainer, removeContainer } from '../services/container.js';
 import {
   type CyberAccessResult,
+  type DaybreakAccess,
   isCyberGatedProvider,
   isCyberSafeguardDecline,
+  runsWithoutDaybreak,
+  usesDaybreakCheck,
   verifyCyberAccess,
+  verifyDaybreakAccess,
 } from '../services/cyber-access-verification.js';
 import { classifyErrorForTemporal, PentestError } from '../services/error-handling.js';
 import { RenumberError } from '../services/exact-output-commit.js';
@@ -79,6 +83,7 @@ import type { ReportData, ReportMeta } from '../services/report-renderer.js';
 import { assembleFinalReportWithEvidence } from '../services/reporting.js';
 import { validateAuthentication } from '../services/validate-authentication.js';
 import { AGENTS } from '../session-manager.js';
+import type { ActivityLogger } from '../types/activity-logger.js';
 import type { AgentName } from '../types/agents.js';
 import type { ContainerConfig, VulnClass } from '../types/config.js';
 import { ErrorCode } from '../types/errors.js';
@@ -100,8 +105,11 @@ import {
   RunStateError,
   SAFE_RUN_STATE_MESSAGES,
   type StoredPdfProvenance,
+  shouldReopenReport,
+  withoutReportProgress,
   workspaceExploitMismatchMessage,
 } from '../types/run-state.js';
+import { failureType, type WorkflowFailureType } from '../types/workflow-failures.js';
 import { atomicWrite, fileExists, readJson } from '../utils/file-io.js';
 import { createActivityLogger } from './activity-logger.js';
 import type {
@@ -223,7 +231,7 @@ function runStateFailure(error: unknown): ApplicationFailure {
 const RENUMBER_STABLE_FAILURE_TYPES = Object.freeze({
   'unmappable-survivor': 'UnmappableSurvivor',
   'key-set-divergence': 'KeySetDivergence',
-} as const satisfies Record<RenumberError['type'], string>);
+} as const satisfies Record<RenumberError['type'], WorkflowFailureType>);
 
 /**
  * Classify a failure from a deterministic report-processing activity (renumber, compaction,
@@ -231,20 +239,26 @@ const RENUMBER_STABLE_FAILURE_TYPES = Object.freeze({
  * to the specific stage that broke; this is the one place that maps those types onto stable
  * Temporal failure names, so the mapping cannot drift between call sites.
  */
-function deterministicActivityFailure(error: unknown, failureType: string): ApplicationFailure {
+function deterministicActivityFailure(
+  error: unknown,
+  stage: Extract<
+    WorkflowFailureType,
+    'ReportRenumberError' | 'ReportAssemblyError' | 'ReportCompactionError' | 'ReportFinalizationError'
+  >,
+): ApplicationFailure {
   if (error instanceof RunStateError) return runStateFailure(error);
   if (error instanceof ReportSarifRenderError) {
     // The workflow invokes degraded finalization only after this exact retryable type
     // exhausts the activity policy, so the name must survive the boundary unflattened.
     return ApplicationFailure.create({
       message: error.message,
-      type: 'ReportSarifRenderError',
+      type: failureType('ReportSarifRenderError'),
       nonRetryable: false,
-      details: [{ stage: failureType }],
+      details: [{ stage }],
     });
   }
   if (error instanceof ReportFinalizationIntegrityError) {
-    return ApplicationFailure.nonRetryable(error.message, 'ReportFinalizationIntegrityError', [
+    return ApplicationFailure.nonRetryable(error.message, failureType('ReportFinalizationIntegrityError'), [
       { checkCode: error.checkCode },
     ]);
   }
@@ -265,8 +279,8 @@ function deterministicActivityFailure(error: unknown, failureType: string): Appl
   const classified = classifyErrorForTemporal(error);
   const message = 'Deterministic report processing failed.';
   return classified.retryable
-    ? ApplicationFailure.create({ message, type: failureType })
-    : ApplicationFailure.nonRetryable(message, failureType);
+    ? ApplicationFailure.create({ message, type: stage })
+    : ApplicationFailure.nonRetryable(message, stage);
 }
 
 /**
@@ -278,7 +292,7 @@ function resolveAnalysisClasses(input: ActivityInput): readonly VulnClass[] {
   if (input.analysisClasses === undefined) {
     throw ApplicationFailure.nonRetryable(
       'Workflow-resolved analysis scope is required.',
-      'IncompatibleWorkspaceError',
+      failureType('IncompatibleWorkspaceError'),
       [{ checkCode: 'analysis-scope-missing' }],
     );
   }
@@ -347,6 +361,12 @@ async function rollbackInvalidReportDraft(input: ActivityInput, progress: Report
   const auditSession = new AuditSession(buildSessionMetadata(input));
   await auditSession.initialize(input.workflowId);
   await auditSession.rollbackReportDraft();
+}
+
+async function reopenReportForRetry(input: ActivityInput): Promise<void> {
+  const auditSession = new AuditSession(buildSessionMetadata(input));
+  await auditSession.initialize(input.workflowId);
+  await auditSession.reopenReport();
 }
 
 /**
@@ -463,7 +483,7 @@ async function runAgentActivity(
     ) {
       throw ApplicationFailure.nonRetryable(
         `Agent ${agentName} failed output validation after ${attemptNumber} attempts`,
-        'OutputValidationError',
+        failureType('OutputValidationError'),
         [{ agentName, attemptNumber, elapsed: Date.now() - startTime }],
       );
     }
@@ -696,7 +716,7 @@ export async function runReportAgent(input: ActivityInput, exploit: boolean): Pr
   const { createFindingCollector } = await import('../collectors/finding-collector.js');
   const assessmentDate = input.assessmentDate;
   if (assessmentDate === undefined) {
-    throw ApplicationFailure.nonRetryable('The report assessment date is missing.', 'ConfigurationError', [
+    throw ApplicationFailure.nonRetryable('The report assessment date is missing.', failureType('ConfigurationError'), [
       { checkCode: 'report-assessment-date-missing' },
     ]);
   }
@@ -870,14 +890,60 @@ export async function runPreflightValidation(input: ActivityInput): Promise<void
 }
 
 /** The provider-specific cyber-access failure type (see workflow-errors.ts); `openai-codex` maps to the OpenAI error. */
-function cyberAccessErrorType(providerId: string): string {
+function cyberAccessErrorType(
+  providerId: string,
+): Extract<WorkflowFailureType, 'AnthropicCyberAccessError' | 'OpenAiCyberAccessError'> {
   return providerId === 'anthropic' ? 'AnthropicCyberAccessError' : 'OpenAiCyberAccessError';
 }
 
+async function checkDaybreakAccess(selection: ModelSelection, logger: ActivityLogger): Promise<DaybreakAccess> {
+  let apiKey: string | undefined;
+  try {
+    apiKey = (await selection.modelRuntime.getAuth(selection.providerId))?.auth.apiKey;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.info(`Cyber access verification: Daybreak unverified (credential error: ${message.slice(0, 200)})`);
+    return { status: 'unverified', transient: true, checkCode: 'daybreak-credential-error' };
+  }
+  if (!apiKey) {
+    logger.info('Cyber access verification: Daybreak unverified (no credential resolved)');
+    return { status: 'unverified', transient: false, checkCode: 'daybreak-no-credential' };
+  }
+
+  logger.info(`Verifying Daybreak access for ${selection.model.id}...`);
+  const access = await verifyDaybreakAccess(selection.providerId, selection.model.baseUrl, apiKey, selection.model.id);
+  const detail = access.status === 'unverified' ? ` (${access.checkCode})` : '';
+  logger.info(`Cyber access verification: Daybreak ${access.status}${detail} for ${selection.model.id}`);
+  return access;
+}
+
+function daybreakFailure(
+  access: Exclude<DaybreakAccess, { status: 'enabled' }>,
+  selection: ModelSelection,
+  attemptNumber: number,
+  startTime: number,
+): ApplicationFailure {
+  const details = { phase: 'cyber-access', attemptNumber, elapsed: Date.now() - startTime };
+  let failure: ApplicationFailure;
+  if (access.status === 'declined') {
+    const message = truncateErrorMessage(`openai has no Daybreak access program enabled for ${selection.model.id}`);
+    failure = ApplicationFailure.nonRetryable(message, cyberAccessErrorType(selection.providerId), [details]);
+  } else {
+    const message = truncateErrorMessage(`Daybreak access could not be verified for ${selection.model.id}`);
+    const type = failureType('CyberAccessUnverifiedError');
+    const failureDetails = [{ ...details, checkCode: access.checkCode }];
+    failure = access.transient
+      ? ApplicationFailure.retryable(message, type, failureDetails)
+      : ApplicationFailure.nonRetryable(message, type, failureDetails);
+  }
+  truncateStackTrace(failure);
+  return failure;
+}
+
 /**
- * Cyber access verification activity. For OpenAI/Anthropic, hands the model a slice of the
- * exploit agent's workload and gates on a decline (`stopReason: error`), failing the scan with the
- * provider's own message. A setup/transport fault is not a decline and never gates.
+ * Cyber access verification activity. `openai` and `openai-codex` are checked through Daybreak
+ * (GPT-5.4 is skipped) and fail the scan unless access is confirmed. Anthropic gets a slice of the
+ * exploit agent's workload and gates only on a confirmed decline.
  *
  * Returns `{ gated }` — true only for a provider that actually gates security workloads, so the
  * caller records the cyber-access stage for those alone (a non-gated provider ran a no-op check).
@@ -903,9 +969,22 @@ export async function runCyberAccessVerification(_input: ActivityInput): Promise
       return { gated: false };
     }
 
+    if (usesDaybreakCheck(selection.providerId)) {
+      if (runsWithoutDaybreak(selection.model)) {
+        logger.info(`Cyber access verification: skipped (${selection.model.id} runs without Daybreak)`);
+        return { gated: false };
+      }
+
+      const access = await checkDaybreakAccess(selection, logger);
+      if (access.status === 'enabled') return { gated: true };
+      throw daybreakFailure(access, selection, attemptNumber, startTime);
+    }
+
     logger.info('Verifying cyber access via pi...');
     result = await verifyCyberAccess(selection.model, selection.modelRuntime, selection.providerId);
   } catch (error) {
+    // A Daybreak failure must not be swallowed as a setup fault.
+    if (error instanceof ApplicationFailure) throw error;
     // Setup/transport fault, not a decline — never gates the scan.
     const message = error instanceof Error ? error.message : String(error);
     logger.info(`Cyber access verification: skipped (${message.slice(0, 200)})`);
@@ -1569,9 +1648,11 @@ export async function loadResumeState(
 
   const exists = await fileExists(sessionPath);
   if (!exists) {
-    throw ApplicationFailure.nonRetryable(SAFE_RUN_STATE_MESSAGES.CorruptedSessionError, 'WorkspaceNotFoundError', [
-      { checkCode: 'session-json-missing' },
-    ]);
+    throw ApplicationFailure.nonRetryable(
+      SAFE_RUN_STATE_MESSAGES.CorruptedSessionError,
+      failureType('WorkspaceNotFoundError'),
+      [{ checkCode: 'session-json-missing' }],
+    );
   }
 
   // 2. Parse session.json and validate URL match
@@ -1579,9 +1660,11 @@ export async function loadResumeState(
   try {
     session = await readJson<SessionJson>(sessionPath);
   } catch (error) {
-    throw ApplicationFailure.nonRetryable(SAFE_RUN_STATE_MESSAGES.CorruptedSessionError, 'CorruptedSessionError', [
-      { checkCode: 'session-json-not-json' },
-    ]);
+    throw ApplicationFailure.nonRetryable(
+      SAFE_RUN_STATE_MESSAGES.CorruptedSessionError,
+      failureType('CorruptedSessionError'),
+      [{ checkCode: 'session-json-not-json' }],
+    );
   }
 
   if (!isDurableScanState(session.durableScanState)) {
@@ -1592,7 +1675,7 @@ export async function loadResumeState(
       durableStateMissing
         ? SAFE_RUN_STATE_MESSAGES.IncompatibleWorkspaceError
         : SAFE_RUN_STATE_MESSAGES.CorruptedSessionError,
-      durableStateMissing ? 'IncompatibleWorkspaceError' : 'CorruptedSessionError',
+      durableStateMissing ? failureType('IncompatibleWorkspaceError') : failureType('CorruptedSessionError'),
       [{ checkCode: durableStateMissing ? 'durable-state-missing' : 'durable-state-malformed' }],
     );
   }
@@ -1600,7 +1683,7 @@ export async function loadResumeState(
   if (options.expectedExploit !== undefined && durableState.exploit !== options.expectedExploit) {
     throw ApplicationFailure.nonRetryable(
       workspaceExploitMismatchMessage(durableState.exploit),
-      'IncompatibleWorkspaceError',
+      failureType('IncompatibleWorkspaceError'),
       [{ checkCode: 'exploit-mode-changed' }],
     );
   }
@@ -1608,7 +1691,7 @@ export async function loadResumeState(
   if (session.session.webUrl !== expectedUrl) {
     throw ApplicationFailure.nonRetryable(
       'This workspace was created for a different target URL, so it cannot be resumed against this one. Check -u, or start a new scan with a different -w name.',
-      'URLMismatchError',
+      failureType('URLMismatchError'),
     );
   }
 
@@ -1616,12 +1699,19 @@ export async function loadResumeState(
   const completedAgents: AgentName[] = [];
   const agents = session.metrics.agents;
   const deliverablesPath = deliverablesDir(expectedRepoPath, deliverablesSubdir);
+  const sessionInput: ActivityInput = {
+    webUrl: expectedUrl,
+    repoPath: expectedRepoPath,
+    workflowId: session.session.originalWorkflowId ?? session.session.id,
+    sessionId: workspaceName,
+    ...(deliverablesSubdir !== undefined && { deliverablesSubdir }),
+  };
 
   const miscellaneousAgentSucceeded = agents['miscellaneous-exploit']?.status === 'success';
   if (miscellaneousAgentSucceeded !== (durableState.miscellaneous_outcome === 'completed')) {
     throw ApplicationFailure.nonRetryable(
       'The admitted miscellaneous-agent state conflicts with persisted metrics.',
-      'CorruptedSessionError',
+      failureType('CorruptedSessionError'),
       [{ checkCode: 'miscellaneous-outcome-metrics-divergence' }],
     );
   }
@@ -1629,7 +1719,7 @@ export async function loadResumeState(
   if (reportAgentSucceeded !== (durableState.report?.stage === 'finalized')) {
     throw ApplicationFailure.nonRetryable(
       'The report terminal state conflicts with persisted metrics.',
-      'CorruptedSessionError',
+      failureType('CorruptedSessionError'),
       [{ checkCode: 'report-stage-metrics-divergence' }],
     );
   }
@@ -1637,16 +1727,7 @@ export async function loadResumeState(
   if (durableState.report?.stage === 'draft') {
     const draftValidation = await validateDraftProgress(deliverablesPath, durableState.report);
     if (draftValidation === 'invalid-model') {
-      await rollbackInvalidReportDraft(
-        {
-          webUrl: expectedUrl,
-          repoPath: expectedRepoPath,
-          workflowId: session.session.originalWorkflowId ?? session.session.id,
-          sessionId: workspaceName,
-          ...(deliverablesSubdir !== undefined && { deliverablesSubdir }),
-        },
-        durableState.report,
-      );
+      await rollbackInvalidReportDraft(sessionInput, durableState.report);
       durableState = {
         ...durableState,
         report: {
@@ -1656,18 +1737,22 @@ export async function loadResumeState(
         },
       };
     } else if (draftValidation === 'invalid-canonical') {
-      throw ApplicationFailure.nonRetryable('The canonical report checkpoint is invalid.', 'CorruptedSessionError', [
-        { checkCode: 'report-canonical-checkpoint-invalid' },
-      ]);
+      throw ApplicationFailure.nonRetryable(
+        'The canonical report checkpoint is invalid.',
+        failureType('CorruptedSessionError'),
+        [{ checkCode: 'report-canonical-checkpoint-invalid' }],
+      );
     }
   }
   if (
     durableState.report?.stage === 'finalized' &&
     !(await finalProgressIsCoherent(deliverablesPath, durableState.report))
   ) {
-    throw ApplicationFailure.nonRetryable('The terminal report checkpoint proof is invalid.', 'CorruptedSessionError', [
-      { checkCode: 'report-final-proof-invalid' },
-    ]);
+    throw ApplicationFailure.nonRetryable(
+      'The terminal report checkpoint proof is invalid.',
+      failureType('CorruptedSessionError'),
+      [{ checkCode: 'report-final-proof-invalid' }],
+    );
   }
 
   for (const agentName of durableState.expected_agents) {
@@ -1693,17 +1778,26 @@ export async function loadResumeState(
     completedAgents.push(agentName);
   }
 
-  // 4. Collect git checkpoints and validate at least one exists
-  const checkpoints = completedAgents
+  // 4. Reopen the report when a class failed
+  const unfinishedAgents = durableState.expected_agents.filter((agentName) => !completedAgents.includes(agentName));
+  const reopenReport = shouldReopenReport(durableState.report);
+  const resumeCompletedAgents = reopenReport
+    ? completedAgents.filter((agentName) => agentName !== 'report')
+    : completedAgents;
+
+  // 5. Collect git checkpoints and validate at least one exists
+  const checkpoints = resumeCompletedAgents
     .map((name) => agents[name]?.checkpoint)
     .filter((hash): hash is string => hash != null);
-  if (durableState.report?.stage === 'draft') {
+  if (!reopenReport && durableState.report?.stage === 'draft') {
     checkpoints.push(durableState.report.model_checkpoint);
     if (durableState.report.canonical_checkpoint !== undefined) {
       checkpoints.push(durableState.report.canonical_checkpoint);
     }
   }
-  if (durableState.report?.stage === 'finalized') checkpoints.push(durableState.report.final_checkpoint);
+  if (!reopenReport && durableState.report?.stage === 'finalized') {
+    checkpoints.push(durableState.report.final_checkpoint);
+  }
 
   if (checkpoints.length === 0) {
     const successAgents = Object.entries(agents)
@@ -1717,26 +1811,40 @@ export async function loadResumeState(
             `but their deliverable files are missing from disk. ` +
             `Start a fresh run instead.`
           : `No agents completed successfully. Start a fresh run instead.`),
-      'NoCheckpointsError',
+      failureType('NoCheckpointsError'),
     );
   }
 
-  // 5. Find the most recent checkpoint commit
+  // 6. Find the most recent checkpoint commit
   const checkpointHash = await findLatestCommit(deliverablesPath, checkpoints);
   const originalWorkflowId = session.session.originalWorkflowId || session.session.id;
-
-  // 6. Log summary and return resume state
   const logger = createActivityLogger();
+
+  // 7. Persist the reopen after verifying the restore point and before any git change, so a crash
+  //    after the write simply resumes the same way.
+  if (reopenReport) {
+    if ((await resolveCheckpointCommit(deliverablesPath, checkpointHash)) === null) {
+      throw ApplicationFailure.nonRetryable(SAFE_RUN_STATE_MESSAGES.CorruptedSessionError, 'CorruptedSessionError', [
+        { checkCode: 'report-reopen-checkpoint-missing' },
+      ]);
+    }
+    await reopenReportForRetry(sessionInput);
+    durableState = withoutReportProgress(durableState);
+    const retriedAgents = unfinishedAgents.filter((agentName) => agentName !== 'report');
+    logger.warn(`Report reopened so this resume retries: ${retriedAgents.join(', ')}`);
+  }
+
+  // 8. Log summary and return resume state
   logger.info('Resume state loaded', {
     workspace: workspaceName,
-    completedAgents: completedAgents.length,
+    completedAgents: resumeCompletedAgents.length,
     checkpoint: checkpointHash,
   });
 
   return {
     workspaceName,
     originalUrl: session.session.webUrl,
-    completedAgents,
+    completedAgents: resumeCompletedAgents,
     checkpointHash,
     originalWorkflowId,
     expectedAgents: [...durableState.expected_agents],
@@ -1763,7 +1871,7 @@ export async function persistOrValidateRunScope(
   if (input.stateContext === undefined) {
     throw ApplicationFailure.nonRetryable(
       'The workflow must identify fresh or resume initialization explicitly.',
-      'IncompatibleWorkspaceError',
+      failureType('IncompatibleWorkspaceError'),
       [{ checkCode: 'state-context-missing' }],
     );
   }
@@ -1785,13 +1893,23 @@ async function findLatestCommit(gitDir: string, commitHashes: string[]): Promise
     return hash;
   }
 
+  // NOTE: commit dates can tie within a second, so order by history.
   const result = await executeGitCommandWithRetry(
-    ['git', 'rev-list', '--max-count=1', ...commitHashes],
+    ['git', 'rev-list', '--max-count=1', '--topo-order', ...commitHashes],
     gitDir,
     'find latest commit',
   );
+  const latest = result.stdout.trim();
 
-  return result.stdout.trim();
+  // A checkpoint outside the restore point's history is on a branch an earlier restore discarded.
+  for (const hash of commitHashes) {
+    if (!(await checkpointIsAncestor(hash, latest, gitDir))) {
+      throw ApplicationFailure.nonRetryable(SAFE_RUN_STATE_MESSAGES.CorruptedSessionError, 'CorruptedSessionError', [
+        { checkCode: 'resume-checkpoints-diverged' },
+      ]);
+    }
+  }
+  return latest;
 }
 
 /**
@@ -1815,7 +1933,7 @@ export async function restoreGitCheckpoint(
   if (durable === undefined) {
     throw ApplicationFailure.nonRetryable(
       'Persisted restore membership is required before workspace mutation.',
-      'IncompatibleWorkspaceError',
+      failureType('IncompatibleWorkspaceError'),
       [{ checkCode: 'restore-durable-membership-missing' }],
     );
   }
@@ -1840,7 +1958,7 @@ export async function restoreGitCheckpoint(
   ) {
     throw ApplicationFailure.nonRetryable(
       'Persisted restore membership or report state is malformed.',
-      'CorruptedSessionError',
+      failureType('CorruptedSessionError'),
       [{ checkCode: 'restore-durable-input-malformed' }],
     );
   }

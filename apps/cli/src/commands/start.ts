@@ -14,6 +14,7 @@ import { ensureDocker, ensureImage, ensureInfra, randomSuffix, spawnWorker } fro
 import { buildEnvFlags, loadEnv, resolveHostPiAuthPath, shouldUsePiAuth, validateCredentials } from '../env.js';
 import { fail, warn } from '../errors.js';
 import { runExpPhp2shell } from '../exp-php2shell/run.js';
+import { prepareWorktreeGitMounts } from '../git-worktree.js';
 import { getWorkspacesDir, initHome } from '../home.js';
 import { commandPrefix, isLocal } from '../mode.js';
 import { resolveModelSpec } from '../model-spec.js';
@@ -29,6 +30,7 @@ import {
   STARTUP_ERROR_FILENAME,
 } from '../paths.js';
 import { clearPendingWorkflowIdentity, writePendingWorkflowIdentity } from '../pending-workflow.js';
+import { runLimitsError } from '../run-limits.js';
 import { indentFailureSegments, parseFailureSegments } from '../scan/failure.js';
 import { resolveWorkflowId } from '../session.js';
 import { displayPlainBanner, displaySplash } from '../splash.js';
@@ -294,6 +296,10 @@ export async function start(args: StartArgs): Promise<void> {
   if (!creds.valid) {
     fail(creds.error ?? 'Invalid credentials');
   }
+  const limitsError = runLimitsError();
+  if (limitsError !== undefined) {
+    fail(limitsError);
+  }
   const repo = resolveRepo(args.repo);
   const config = args.config ? resolveConfig(args.config) : undefined;
   const modelsConfig = args.modelsConfig ? resolveModelsConfig(args.modelsConfig) : undefined;
@@ -382,6 +388,7 @@ export async function start(args: StartArgs): Promise<void> {
     fs.mkdirSync(path.join(shannonDir, dir), { recursive: true });
   }
   fs.mkdirSync(path.join(repo.hostPath, '.playwright'), { recursive: true });
+  const worktreeGit = prepareWorktreeGitMounts(repo, internalPath);
 
   // 6. Create the validated customer-copy destination, if configured.
   const outputDir = launchDecision.outputDir;
@@ -420,6 +427,7 @@ export async function start(args: StartArgs): Promise<void> {
     version: args.version,
     url: args.url,
     repo,
+    ...(worktreeGit && { worktreeGit }),
     workspacesDir,
     taskQueue,
     workflowId,

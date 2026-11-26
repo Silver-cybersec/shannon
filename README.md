@@ -1,5 +1,5 @@
 > [!NOTE]
-> **[php2shell upgrade verification](docs/exp-php2shell.md):** confirm your PHP apps are patched against the php2shell RCE chain with the experimental `--exp-php2shell` probe. See the [test results](docs/exp-php2shell-testing.md).
+> **[Git worktrees, run limits and OpenAI cyber access checks](https://github.com/KeygraphHQ/shannon/discussions/541):** scan a worktree directly, tune scans for slow model endpoints, and catch missing OpenAI access before a scan starts.
 
 <div align="center">
 
@@ -27,7 +27,7 @@ npx @keygraph/shannon@latest
 
 ---
 
-<a href="https://discord.gg/9ZqQPuhJB7"><picture><source media="(prefers-color-scheme: dark)" srcset="./assets/discord_button_dark.png"><source media="(prefers-color-scheme: light)" srcset="./assets/discord_button_light.png"><img src="./assets/discord_button_light.png" height="40" alt="Join Discord"></picture></a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://keygraph.io/"><picture><source media="(prefers-color-scheme: dark)" srcset="./assets/keygraph_button_dark.png"><source media="(prefers-color-scheme: light)" srcset="./assets/keygraph_button_light.png"><img src="./assets/keygraph_button_light.png" height="40" alt="Visit Keygraph.io"></picture></a>
+<a href="https://discord.gg/9ZqQPuhJB7"><picture><source media="(prefers-color-scheme: dark)" srcset="./assets/discord_button_dark.png"><source media="(prefers-color-scheme: light)" srcset="./assets/discord_button_light.png"><img src="./assets/discord_button_light.png" height="40" alt="Join Discord"></picture></a>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://keygraph.io/?utm_source=github&amp;utm_medium=referral&amp;utm_campaign=shannon_oss_2026q4&amp;utm_content=readme_header_button"><picture><source media="(prefers-color-scheme: dark)" srcset="./assets/keygraph_button_dark.png"><source media="(prefers-color-scheme: light)" srcset="./assets/keygraph_button_light.png"><img src="./assets/keygraph_button_light.png" height="40" alt="Visit Keygraph.io"></picture></a>
 
 ---
 
@@ -72,11 +72,11 @@ npx @keygraph/shannon@latest
 
 ## What is Shannon?
 
-Shannon is an autonomous AI pentester developed by [Keygraph](https://keygraph.io). It performs security testing of web applications and their underlying APIs by combining source-code analysis with live exploitation.
+Shannon is an autonomous AI pentester developed by [Keygraph](https://keygraph.io/?utm_source=github&utm_medium=referral&utm_campaign=shannon_oss_2026q4&utm_content=readme_intro). It performs security testing of web applications and their underlying APIs by combining source-code analysis with live exploitation.
 
 Shannon analyzes your web application's source code to identify potential attack vectors, then uses browser automation and command-line tools to execute real exploits against the running application and its APIs. Only vulnerabilities with a working proof-of-concept are included in the final report.
 
-Shannon is the agent. This repository is Shannon, the open-source pentester you run yourself. The same Shannon also powers Keygraph's commercial editions, [Pro and Enterprise](https://keygraph.io/pricing). See [Editions](#editions) for how Shannon compares with Pro, Enterprise, and the Community Program.
+Shannon is the agent. This repository is Shannon, the open-source pentester you run yourself. The same Shannon also powers Keygraph's commercial editions, [Pro and Enterprise](https://keygraph.io/pricing?utm_source=github&utm_medium=referral&utm_campaign=shannon_oss_2026q4&utm_content=readme_intro_pricing). See [Editions](#editions) for how Shannon compares with Pro, Enterprise, and the Community Program.
 
 <a id="why-shannon-exists"></a>
 <details>
@@ -112,7 +112,7 @@ Shannon shifts pentesting left into the software development lifecycle (SDLC). U
 
 ## Shannon in Action
 
-![Shannon running an autonomous pentest](assets/Shannon3GIF.gif)
+![Shannon running an autonomous pentest](assets/shannon-demo.gif)
 
 These reports are from Shannon OSS scans of Photoview 2.4.0, one of the applications in Doyensec's comparison of Aikido and XBOW. We ran Shannon against the same application version and evaluated its results separately. Read the [Doyensec study](https://doyensec.com/resources/ComparingAIApplicationSecurityTestingPlatforms_Doyensec.pdf) and our [Shannon follow-up comparison](docs/shannon-xbow-aikido-benchmark.md) for the methodology, limitations, costs, and results.
 
@@ -242,7 +242,7 @@ See the [Shannon GitHub Action documentation](https://github.com/KeygraphHQ/shan
 | **Pro** | Keygraph's cloud-hosted edition, managed by Keygraph, with every module included. | $50 per active developer per month. |
 | **Enterprise** | Everything in Pro, self-hosted in your own environment or fully air-gapped. | Custom. |
 
-See [keygraph.io/pricing](https://keygraph.io/pricing) for current prices and the full feature table.
+See [keygraph.io/pricing](https://keygraph.io/pricing?utm_source=github&utm_medium=referral&utm_campaign=shannon_oss_2026q4&utm_content=readme_editions_pricing) for current prices and the full feature table.
 
 **Pro**, **Enterprise**, and the **Community Program** are powered by an enhanced, enterprise-grade version of the Shannon engine, and all three add:
 
@@ -252,7 +252,7 @@ See [keygraph.io/pricing](https://keygraph.io/pricing) for current prices and th
 - **Fix pull requests and retests**: reviewable fix pull requests, with each fix verified by re-analysis and exploit replay, without a full rescan.
 - **Jira and access control**: two-way Jira sync, SSO, RBAC, and audit logs.
 
-No source code? Use the [Blackbox Pentester](https://keygraph.io/agentic-blackbox-pentester).
+No source code? Use the [Blackbox Pentester](https://keygraph.io/agentic-blackbox-pentester?utm_source=github&utm_medium=referral&utm_campaign=shannon_oss_2026q4&utm_content=readme_editions_blackbox).
 
 [Compare Shannon, Pro, and Enterprise in detail →](docs/keygraph-platform.md)
 
@@ -364,7 +364,7 @@ At this time, Keygraph is not accepting external code contributions. Issues are 
 
 Stay connected:
 
-- [Keygraph website](https://keygraph.io)
+- [Keygraph website](https://keygraph.io/?utm_source=github&utm_medium=referral&utm_campaign=shannon_oss_2026q4&utm_content=readme_community_website)
 - [Twitter/X: @KeygraphHQ](https://twitter.com/KeygraphHQ)
 - [LinkedIn: Keygraph](https://linkedin.com/company/keygraph)
 
@@ -382,7 +382,7 @@ Keygraph never receives your source code and never proxies your model traffic. Y
 
 ### Does Shannon support bring your own key (BYOK)?
 
-Yes, always. You provide the LLM credentials Shannon uses to run a pentest, in every deployment, open source and commercial. Keygraph never proxies your model traffic.
+Yes, always. You provide the LLM credentials Shannon uses to run a pentest, in every deployment, open source and commercial. Shannon sends model requests straight to the provider or endpoint you configure, and Keygraph never proxies them. In self-hosted Enterprise deployments, model requests never touch Keygraph's infrastructure: they leave your environment only to reach the endpoint you configure. In Keygraph Pro, which Keygraph hosts, model requests are routed through Keygraph's LLM gateway.
 
 ### Does Shannon output SARIF?
 
@@ -400,4 +400,4 @@ Shannon works with local models served through Ollama, vLLM, or LM Studio, which
 
 Shannon executes real exploits. It reports a finding only when it has produced a working proof-of-concept, and discards hypotheses it cannot prove. It is a pentester, not a passive scanner.
 
-**Built by [Keygraph](https://keygraph.io)**
+**Built by [Keygraph](https://keygraph.io/?utm_source=github&utm_medium=referral&utm_campaign=shannon_oss_2026q4&utm_content=readme_footer)**
