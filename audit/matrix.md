@@ -16,6 +16,8 @@
 | R5 | 产出精练中文报告 | 四个交付文件；每节先结论再短分条 | 本目录四个文件 | 已写在本分支，仅新增 `audit/` | 无运行录像、无镜像层清单、无旧报告全文附件 |
 | R6 | 对照旧审计基准 | `4cef63e5...3760d2f9`；旧结论逐项标仍成立／已变化／未覆盖 | 本地 `merge-base` 等于旧基准；ahead 15、behind 0。主报告第 5 节 | 旧结论「未见隐藏后门」「实验室部署风险高」「供应链中」仍成立。新增插件与 pi 主版本升级改变了信任边界和依赖面，没有把宿主风险降下来。入口脚本问题在旧树已存在，旧结论未单列 | 旧报告全文与飞书卡不在本树，未读取 |
 | R7 | 不新建私库、不改产品代码、不把静态阅读写成已运行验证 | 交付物与表述 | 本 PR 只新增 `audit/` 四个文件 | 符合。未写「已验证可部署」 | — |
+| R8 | 功能与使用：README／文档宣称与实现是否一致；安装后怎么用 | 逐条宣称→文件:行号→一致／部分／不符／未找到；主要命令、关键配置默认值、一条典型工作流 | 主报告第 8 节。对照 `README.md`、`docs/development.md`、`docs/configuration.md`、`docs/coverage-roadmap.md` 与 CLI／workflow 源码 | 主路径一致。部分：SAST 默认可选但架构图未标明、`exploit: false` 仍出分析报告、裸 npx 只引导 setup、五类之外另有 miscellaneous、`logs` 帮助未列 `--agent`。不符：`docs/configuration.md:24` 的 `configs/example-config.yaml` 在本树不存在。未找到：本仓内的 GitHub Action／GitLab 组件。全部未实测 | 外部 Action／GitLab 仓未读；未逐份读提示词；未实际执行任何命令 |
+| R9 | 编译与部署要求 | Dockerfile／compose／包管理器、语言与外部服务版本、硬件、外网依赖、文档与代码不符 | 主报告第 9 节。`Dockerfile`、两份 compose、`package.json`、`docs/development.md`、`docs/platforms.md` | 无 Makefile。pnpm 构建加 `./shannon build`；npx 拉 Docker Hub；compose 只起 Temporal（内嵌 `temporal.db`）。文档要求 Node 22+，`apps/cli/package.json` 为 `>=18` 且 CLI 不检查版本。未写 GPU／内存下限；代码有 `--shm-size 2gb`。全部未实测，不得称为已验证可部署 | 未执行 `pnpm install`、`pnpm build`、`docker build` 或 compose。镜像层仍未拉取 |
 
 ## 执行中补充的检查行
 
